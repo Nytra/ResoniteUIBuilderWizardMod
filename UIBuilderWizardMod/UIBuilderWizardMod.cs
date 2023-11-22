@@ -55,6 +55,13 @@ namespace UIBuilderWizardMod
 			// layout
 			Button verticalLayoutButton;
 			Button horizontalLayoutButton;
+			Button scrollAreaButton;
+			Button spacerButton;
+
+			// graphics
+			Button imageButton;
+			ValueField<colorX> imageColor;
+			Button textButton;
 
 			// interaction
 			Button buttonButton;
@@ -78,7 +85,7 @@ namespace UIBuilderWizardMod
 
 				WizardDataSlot = WizardSlot.AddSlot("Data");
 
-				WizardUI = RadiantUI_Panel.SetupPanel(WizardSlot, WIZARD_TITLE.AsLocaleKey(), new float2(800f, 800f));
+				WizardUI = RadiantUI_Panel.SetupPanel(WizardSlot, WIZARD_TITLE.AsLocaleKey(), new float2(800f, 1200f));
 				RadiantUI_Constants.SetupEditorStyle(WizardUI);
 
 				WizardUI.Canvas.MarkDeveloper();
@@ -100,7 +107,9 @@ namespace UIBuilderWizardMod
 			{
 				//WizardDataSlot.DestroyChildren();
 				WizardContentSlot.DestroyChildren();
-				WizardUI.ForceNext = WizardContentSlot.GetComponent<RectTransform>();
+				var rect = WizardContentSlot.GetComponent<RectTransform>();
+				WizardUI.ForceNext = rect;
+				WizardContentSlot.RemoveAllComponents((Component c) => c != rect);
 
 				if (!ValidateCurrentBuilder())
 				{
@@ -126,6 +135,9 @@ namespace UIBuilderWizardMod
 				{
 					// build main screen
 
+					//WizardUI.ScrollArea();
+					//WizardUI.FitContent(SizeFit.Disabled, SizeFit.PreferredSize);
+
 					VerticalLayout verticalLayout = WizardUI.VerticalLayout(4f, childAlignment: Alignment.TopCenter);
 					verticalLayout.ForceExpandHeight.Value = false;
 
@@ -141,6 +153,28 @@ namespace UIBuilderWizardMod
 
 					horizontalLayoutButton = WizardUI.Button("Horizontal Layout");
 					horizontalLayoutButton.LocalPressed += AddHorizontalLayout;
+
+					scrollAreaButton = WizardUI.Button("Scroll Area");
+					scrollAreaButton.LocalPressed += AddScrollArea;
+
+					spacerButton = WizardUI.Button("Spacer");
+					spacerButton.LocalPressed += AddSpacer;
+
+					WizardUI.Spacer(24f);
+
+					WizardUI.Text("Graphics");
+
+					imageColor = WizardDataSlot.FindChildOrAdd("Image Color").AttachComponent<ValueField<colorX>>();
+					imageColor.Value.Value = colorX.White;
+
+					WizardUI.Text("Color:").HorizontalAlign.Value = TextHorizontalAlignment.Left;
+					SyncMemberEditorBuilder.Build(imageColor.Value, imageColor.Value.Name, null, WizardUI);
+
+					imageButton = WizardUI.Button("Image");
+					imageButton.LocalPressed += AddImage;
+
+					textButton = WizardUI.Button("Text");
+					textButton.LocalPressed += AddText;
 
 					WizardUI.Spacer(24f);
 
@@ -233,9 +267,60 @@ namespace UIBuilderWizardMod
 				RegenerateWizardUI();
 			}
 
+			// ===== ACTIONS =====
+
+			void AddVerticalLayout(IButton button, ButtonEventData eventData)
+			{
+				WizardAction(button, eventData, () => 
+				{ 
+					currentBuilder.VerticalLayout();
+				});
+			}
+
+			void AddHorizontalLayout(IButton button, ButtonEventData eventData)
+			{
+				WizardAction(button, eventData, () => 
+				{
+					currentBuilder.HorizontalLayout();
+				});
+			}
+
+			void AddScrollArea(IButton button, ButtonEventData eventData)
+			{
+				WizardAction(button, eventData, () =>
+				{
+					currentBuilder.ScrollArea();
+					currentBuilder.FitContent();
+				});
+			}
+
+			void AddSpacer(IButton button, ButtonEventData eventData)
+			{
+				WizardAction(button, eventData, () =>
+				{
+					currentBuilder.Spacer(24f);
+				});
+			}
+
+			void AddImage(IButton button, ButtonEventData eventData)
+			{
+				WizardAction(button, eventData, () =>
+				{
+					currentBuilder.Image(imageColor.Value.Value);
+				});
+			}
+
+			void AddText(IButton button, ButtonEventData eventData)
+			{
+				WizardAction(button, eventData, () =>
+				{
+					currentBuilder.Text("Text");
+				});
+			}
+
 			void AddButton(IButton button, ButtonEventData eventData)
 			{
-				WizardAction(button, eventData, () => { currentBuilder.Button("Test Button"); });
+				WizardAction(button, eventData, () => { currentBuilder.Button("Button"); });
 			}
 
 			void AddCheckbox(IButton button, ButtonEventData eventData)
@@ -252,36 +337,26 @@ namespace UIBuilderWizardMod
 				});
 			}
 
-			void AddVerticalLayout(IButton button, ButtonEventData eventData)
-			{
-				WizardAction(button, eventData, () => { currentBuilder.VerticalLayout(4f, childAlignment: Alignment.TopCenter); });
-			}
-
-			void AddHorizontalLayout(IButton button, ButtonEventData eventData)
-			{
-				WizardAction(button, eventData, () => { currentBuilder.HorizontalLayout(4f, childAlignment: Alignment.TopCenter); });
-			}
-
 			void AddMemberEditor(IButton button, ButtonEventData eventData)
 			{
 				WizardAction(button, eventData, () =>
 				{
 					if (memberEditorMember.Reference.Target != null)
 					{
-						currentBuilder.Next("MemberEditor");
+						//currentBuilder.Next("MemberEditor");
 						SyncMemberEditorBuilder.Build(memberEditorMember.Reference.Target, memberEditorMember.Reference.Target.Name, null, currentBuilder);
 					}
 				});
 			}
 
-			void NestOut(IButton button, ButtonEventData eventData)
-			{
-				WizardAction(button, eventData, () => { currentBuilder.NestOut(); });
-			}
-
 			void Nest(IButton button, ButtonEventData eventData)
 			{
 				WizardAction(button, eventData, () => { currentBuilder.Nest(); });
+			}
+
+			void NestOut(IButton button, ButtonEventData eventData)
+			{
+				WizardAction(button, eventData, () => { currentBuilder.NestOut(); });
 			}
 
 			void NestInto(IButton button, ButtonEventData eventData)

@@ -7,8 +7,7 @@ using Elements.Assets;
 using System;
 using System.Reflection;
 using HarmonyLib;
-using static FrooxEngine.UIX.LayoutHelper;
-using System.Security.Cryptography;
+using FrooxEngine.Undo;
 
 namespace UIBuilderWizardMod
 {
@@ -39,6 +38,7 @@ namespace UIBuilderWizardMod
 
 			private static FieldInfo rootsField = AccessTools.Field(typeof(UIBuilder), "roots");
 			private static FieldInfo uiStylesField = AccessTools.Field(typeof(UIBuilder), "_uiStyles");
+			private static FieldInfo currentField = AccessTools.Field(typeof(UIBuilder), "Current");
 
 			Slot WizardSlot;
 			Slot WizardContentSlot;
@@ -46,6 +46,8 @@ namespace UIBuilderWizardMod
 			Slot WizardDataSlot;
 			UIBuilder WizardUI;
 			//UIStyle WizardStyle;
+			Slot lastRoot;
+			Slot lastCurrent;
 			
 			UIBuilder currentBuilder;
 			//IWorldElement lastElement;
@@ -161,7 +163,8 @@ namespace UIBuilderWizardMod
 						currentBuilder = CreatePanel(root, root.Name, panelSize.Value.Value);
 						currentBuilder.Root.OnPrepareDestroy += (slot) => 
 						{
-							WizardSlot.RunSynchronously(() => 
+                            // Run an empty action after the slot gets destroyed simply to update the wizard UI
+                            WizardSlot.RunSynchronously(() => 
 							{ 
 								WizardAction(null, new ButtonEventData(), () => { }); 
 							});
@@ -616,6 +619,8 @@ namespace UIBuilderWizardMod
 
 			void WizardAction(IButton button, ButtonEventData eventData, Action action)
 			{
+				bool didNestOut = false;
+
 				if (!ValidateCurrentBuilder())
 				{
 					if (IsSlotValid(currentBuilder?.Canvas?.Slot))
@@ -623,6 +628,7 @@ namespace UIBuilderWizardMod
 						while (!IsSlotValid(currentBuilder.Current) && !IsSlotValid(currentBuilder.Root))
 						{
 							currentBuilder.NestOut();
+							didNestOut = true;
 						}
 					}
 					else
@@ -631,8 +637,81 @@ namespace UIBuilderWizardMod
 						return;
 					}
 				}
+
+				// Run the action
 				action();
-				UpdateTexts();
+
+                bool flagUndoRoot = false;
+                bool flagUndoCurrent = false;
+
+                if (!didNestOut && lastRoot != currentBuilder.Root && IsSlotValid(currentBuilder.Root))
+                {
+                    flagUndoRoot = true;
+                }
+                if (lastCurrent != currentBuilder.Current && IsSlotValid(currentBuilder.Current))
+                {
+                    flagUndoCurrent = true;
+                }
+
+                // Subscribe to the OnPrepareDestroy event so that the wizard UI can refresh
+                currentBuilder.Root.OnPrepareDestroy += (slot) =>
+                {
+                    // Run an empty action after the slot gets destroyed simply to update the wizard UI
+                    WizardSlot.RunSynchronously(() =>
+					{
+                        WizardAction(null, new ButtonEventData(), () => { });
+                    });
+                };
+
+                if (IsSlotValid(currentBuilder.Current))
+                {
+                    currentBuilder.Current.OnPrepareDestroy += (slot) =>
+                    {
+                        // Run an empty action after the slot gets destroyed simply to update the wizard UI
+                        WizardSlot.RunSynchronously(() =>
+                        {
+                            WizardAction(null, new ButtonEventData(), () => { });
+                        });
+                    };
+                }
+
+                if (flagUndoRoot)
+				{
+                    currentBuilder.World.BeginUndoBatch(button.LabelText);
+                    var spawnOrDestroy = currentBuilder.Root.CreateSpawnUndoPoint();
+                    currentBuilder.World.EndUndoBatch();
+					spawnOrDestroy.Target.Changed += (changeable) => 
+					{
+						var syncRef = changeable as ISyncRef;
+                        if (syncRef.Target != null)
+						{
+							currentBuilder.NestInto((Slot)syncRef.Target);
+							UpdateTexts();
+                        }
+					};
+                }
+
+                if (flagUndoCurrent)
+                {
+                    currentBuilder.World.BeginUndoBatch(button.LabelText);
+                    var spawnOrDestroy = currentBuilder.Current.CreateSpawnUndoPoint();
+                    currentBuilder.World.EndUndoBatch();
+                    spawnOrDestroy.Target.Changed += (changeable) =>
+                    {
+						var syncRef = changeable as ISyncRef;
+                        if (syncRef.Target != null)
+                        {
+							//currentBuilder.ForceNext = ((Slot)syncRef.Target).GetComponent<RectTransform>();
+							currentField.SetValue(currentBuilder, ((Slot)syncRef.Target) ?? ((Component)syncRef.Target).Slot);
+                            UpdateTexts();
+                        }
+                    };
+                }
+
+                lastRoot = currentBuilder.Root;
+                lastCurrent = currentBuilder.Current;
+
+                UpdateTexts();
 			}
 		}
 	}

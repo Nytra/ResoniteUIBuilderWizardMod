@@ -8,6 +8,7 @@ using System;
 using System.Reflection;
 using HarmonyLib;
 using FrooxEngine.Undo;
+using ResoniteHotReloadLib;
 
 namespace UIBuilderWizardMod
 {
@@ -18,15 +19,27 @@ namespace UIBuilderWizardMod
 		public override string Version => "1.0.0";
 		public override string Link => "https://github.com/Nytra/ResoniteUIBuilderWizardMod";
 
-		const string WIZARD_TITLE = "UI Builder Wizard (Mod)";
+		const string WIZARD_TITLE = "UIX Builder Wizard (Mod)";
 
 		public override void OnEngineInit()
 		{
 			Engine.Current.RunPostInit(AddMenuOption);
+			HotReloader.RegisterForHotReload(this);
 		}
-		void AddMenuOption()
+
+		static void AddMenuOption()
 		{
 			DevCreateNewForm.AddAction("Editor", WIZARD_TITLE, (x) => UIBuilderWizard.CreateWizard(x));
+		}
+
+		static void OnHotReload(ResoniteMod mod)
+		{
+			AddMenuOption();
+		}
+
+		static void BeforeHotReload()
+		{
+			HotReloader.RemoveMenuOption("Editor", WIZARD_TITLE);
 		}
 
 		class UIBuilderWizard
@@ -38,7 +51,7 @@ namespace UIBuilderWizardMod
 
 			private static FieldInfo rootsField = AccessTools.Field(typeof(UIBuilder), "roots");
 			private static FieldInfo uiStylesField = AccessTools.Field(typeof(UIBuilder), "_uiStyles");
-			private static FieldInfo currentField = AccessTools.Field(typeof(UIBuilder), "Current");
+			private static PropertyInfo currentField = AccessTools.Property(typeof(UIBuilder), "Current");
 
 			Slot WizardSlot;
 			Slot WizardContentSlot;
@@ -63,6 +76,7 @@ namespace UIBuilderWizardMod
 			// texts
 			Text rootText;
 			Text currentText;
+			Text forceNextText;
 			//Text styleText;
 
 			// extra
@@ -96,6 +110,9 @@ namespace UIBuilderWizardMod
 			Button nestOutButton;
 			ReferenceField<Slot> nestIntoSlot;
 			Button nestIntoButton;
+
+			ReferenceField<RectTransform> forceNextRectTransform;
+			Button forceNextButton;
 
 			UIBuilderWizard(Slot x)
 			{
@@ -139,8 +156,6 @@ namespace UIBuilderWizardMod
 				{
 					// build initial screen
 
-					//WizardUI.PushStyle();
-
 					panelName = WizardDataSlot.FindChildOrAdd("Panel Name").GetComponentOrAttach<ValueField<string>>();
 					panelName.Value.Value = "Test UIX Panel";
 					panelSize = WizardDataSlot.FindChildOrAdd("Panel Size").GetComponentOrAttach<ValueField<float2>>();
@@ -152,11 +167,7 @@ namespace UIBuilderWizardMod
 					SyncMemberEditorBuilder.Build(panelName.Value, "Panel Name", null, WizardUI);
 					SyncMemberEditorBuilder.Build(panelSize.Value, "Panel Size", null, WizardUI);
 
-					//GenerateStyleMemberEditors(WizardUI, WizardUI.Style);
-
-					WizardUI.Spacer(24f);
-
-					createPanelButton = WizardUI.Button("Create Panel");
+					createPanelButton = WizardUI.Button("Create New Panel");
 					createPanelButton.LocalPressed += (btn, data) => 
 					{
 						Slot root = WizardSlot.LocalUserSpace.AddSlot(panelName.Value.Value);
@@ -166,12 +177,48 @@ namespace UIBuilderWizardMod
                             // Run an empty action after the slot gets destroyed simply to update the wizard UI
                             WizardSlot.RunSynchronously(() => 
 							{ 
-								WizardAction(null, new ButtonEventData(), () => { }); 
+								WizardAction(null, new ButtonEventData(), () => { });
 							});
 						};
 						CopyStyle(WizardUI, currentBuilder);
-						//WizardUI.PopStyle();
 						RegenerateWizardUI();
+
+						lastRoot = currentBuilder.Root;
+						lastCurrent = currentBuilder.Current;
+					};
+
+					WizardUI.Spacer(24f);
+
+					var rootSlot = WizardDataSlot.FindChildOrAdd("Root Slot").GetComponentOrAttach<ReferenceField<Slot>>();
+
+					SyncMemberEditorBuilder.Build(rootSlot.Reference, "Root Slot", null, WizardUI);
+
+					forceNextRectTransform = WizardDataSlot.FindChildOrAdd("Force Next RectTransform").GetComponentOrAttach<ReferenceField<RectTransform>>();
+
+					SyncMemberEditorBuilder.Build(forceNextRectTransform.Reference, "(or) Force Next RectTransform", null, WizardUI);
+
+					var openExistingButton = WizardUI.Button("Open Builder For Existing UIX");
+					openExistingButton.LocalPressed += (btn, data) => 
+					{
+						if (rootSlot.Reference.Target == null && forceNextRectTransform.Reference.Target == null) return;
+
+						Slot slot = forceNextRectTransform.Reference.Target?.Slot ?? rootSlot.Reference.Target;
+
+						Slot root = WizardSlot.LocalUserSpace.AddSlot($"Wizard for: {slot.Name}");
+						currentBuilder = new UIBuilder(slot, forceNextRectTransform.Reference.Target?.Slot);
+						currentBuilder.Root.OnPrepareDestroy += (slot2) => 
+						{
+                            // Run an empty action after the slot gets destroyed simply to update the wizard UI
+                            WizardSlot.RunSynchronously(() => 
+							{ 
+								WizardAction(null, new ButtonEventData(), () => { });
+							});
+						};
+						CopyStyle(WizardUI, currentBuilder);
+						RegenerateWizardUI();
+
+						lastRoot = currentBuilder.Root;
+						lastCurrent = currentBuilder.Current;
 					};
 				}
 				else
@@ -186,7 +233,10 @@ namespace UIBuilderWizardMod
 
 					rootText = WizardUI.Text("");
 					currentText = WizardUI.Text("");
+					forceNextText = WizardUI.Text("");
 					//styleText = WizardUI.Text("");
+
+					WizardUI.Spacer(24f);
 
 					openRootSlotButton = WizardUI.Button("Open Root Slot");
 					openRootSlotButton.LocalPressed += OpenRootSlot;
@@ -235,12 +285,6 @@ namespace UIBuilderWizardMod
 
 					WizardUI.Text("Graphics");
 
-					//imageColor = WizardDataSlot.FindChildOrAdd("Image Color").GetComponentOrAttach<ValueField<colorX>>();
-					//imageColor.Value.Value = colorX.White;
-
-					//WizardUI.Text("Color:").HorizontalAlign.Value = TextHorizontalAlignment.Left;
-					//SyncMemberEditorBuilder.Build(imageColor.Value, imageColor.Value.Name, null, WizardUI);
-
 					imageButton = WizardUI.Button("Image");
 					imageButton.LocalPressed += AddImage;
 
@@ -256,12 +300,6 @@ namespace UIBuilderWizardMod
 
 					checkboxButton = WizardUI.Button("Checkbox");
 					checkboxButton.LocalPressed += AddCheckbox;
-
-					//refEditorSyncRef = WizardDataSlot.FindChildOrAdd("RefEditor ISyncRef").AttachComponent<ReferenceField<ISyncRef>>();
-
-					//WizardUI.Text("RefEditor ISyncRef:").HorizontalAlign.Value = TextHorizontalAlignment.Left;
-					//WizardUI.Next("RefEditor ISyncRef");
-					//WizardUI.Current.AttachComponent<RefEditor>().Setup(refEditorSyncRef.Reference);
 
 					refEditorButton = WizardUI.Button("RefEditor");
 					refEditorButton.LocalPressed += AddRefEditor;
@@ -294,6 +332,15 @@ namespace UIBuilderWizardMod
 					nestIntoButton = WizardUI.Button("Nest Into");
 					nestIntoButton.LocalPressed += NestInto;
 
+					forceNextRectTransform = WizardDataSlot.FindChildOrAdd("Force Next RectTransform").GetComponentOrAttach<ReferenceField<RectTransform>>();
+
+					WizardUI.Text("RectTransform:").HorizontalAlign.Value = TextHorizontalAlignment.Left;
+					WizardUI.Next("Force Next RectTransform");
+					WizardUI.Current.AttachComponent<RefEditor>().Setup(forceNextRectTransform.Reference);
+
+					forceNextButton = WizardUI.Button("Force Next");
+					forceNextButton.LocalPressed += ForceNext;
+
 					UpdateTexts();
 				}
 			}
@@ -320,6 +367,15 @@ namespace UIBuilderWizardMod
 				else
 				{
 					currentText.Content.Value += "Null";
+				}
+				forceNextText.Content.Value = "ForceNext: ";
+				if (IsSlotValid(currentBuilder.ForceNext?.Slot))
+				{
+					forceNextText.Content.Value += currentBuilder.ForceNext.Name;
+				}
+				else
+				{
+					forceNextText.Content.Value += "Null";
 				}
 				//styleText.Content.Value = "Styles count: " + uiStyles.Count;
 			}
@@ -415,34 +471,34 @@ namespace UIBuilderWizardMod
 				}
 			}
 
-			void CreatePanelWithMethodParameters(MethodInfo method)
-			{
-				Slot root = WizardSlot.LocalUserSpace.AddSlot("Test Panel with Args");
-				UIBuilder UI = CreatePanel(root, root.Name, new float2(800, 800));
+			//void CreatePanelWithMethodParameters(MethodInfo method)
+			//{
+			//	Slot root = WizardSlot.LocalUserSpace.AddSlot("Test Panel with Args");
+			//	UIBuilder UI = CreatePanel(root, root.Name, new float2(800, 800));
 
-				VerticalLayout verticalLayout = UI.VerticalLayout(4f, childAlignment: Alignment.TopCenter);
-				verticalLayout.ForceExpandHeight.Value = false;
+			//	VerticalLayout verticalLayout = UI.VerticalLayout(4f, childAlignment: Alignment.TopCenter);
+			//	verticalLayout.ForceExpandHeight.Value = false;
 
-				ParameterInfo[] parameters = method.GetParameters();
-				int i = 0;
-				foreach (ParameterInfo param in parameters) 
-				{
-					Slot s = WizardDataSlot.FindChildOrAdd(i.ToString() + "_" + param.Name);
-					if (param.ParameterType.IsValueType)
-					{
-						Type t = typeof(ValueField<>).MakeGenericType(param.ParameterType);
-						Component c = s.AttachComponent(t);
-						SyncMemberEditorBuilder.Build(c.GetSyncMember("Value"), param.Name, null, UI);
-					}
-					else
-					{
-						Type t = typeof(ReferenceField<>).MakeGenericType(param.ParameterType);
-						Component c = s.AttachComponent(t);
-						SyncMemberEditorBuilder.Build(c.GetSyncMember("Reference"), param.Name, null, UI);
-					}
-					i++;
-				}
-			}
+			//	ParameterInfo[] parameters = method.GetParameters();
+			//	int i = 0;
+			//	foreach (ParameterInfo param in parameters) 
+			//	{
+			//		Slot s = WizardDataSlot.FindChildOrAdd(i.ToString() + "_" + param.Name);
+			//		if (param.ParameterType.IsValueType)
+			//		{
+			//			Type t = typeof(ValueField<>).MakeGenericType(param.ParameterType);
+			//			Component c = s.AttachComponent(t);
+			//			SyncMemberEditorBuilder.Build(c.GetSyncMember("Value"), param.Name, null, UI);
+			//		}
+			//		else
+			//		{
+			//			Type t = typeof(ReferenceField<>).MakeGenericType(param.ParameterType);
+			//			Component c = s.AttachComponent(t);
+			//			SyncMemberEditorBuilder.Build(c.GetSyncMember("Reference"), param.Name, null, UI);
+			//		}
+			//		i++;
+			//	}
+			//}
 
 			// ===== ACTIONS =====
 
@@ -481,27 +537,25 @@ namespace UIBuilderWizardMod
 				WizardAction(button, eventData, () => 
 				{
 					VerticalLayout verticalLayout = currentBuilder.VerticalLayout();
-					//lastElement = verticalLayout;
 					verticalLayout.OpenInspectorForTarget(openWorkerOnly: true);
 				});
 			}
 
-			void AddScrollingVerticalLayout(IButton button, ButtonEventData eventData)
-			{
-				WizardAction(button, eventData, () =>
-				{
-					currentBuilder.ScrollArea();
-					currentBuilder.FitContent(SizeFit.Disabled, SizeFit.PreferredSize);
-					currentBuilder.VerticalLayout();
-				});
-			}
+			//void AddScrollingVerticalLayout(IButton button, ButtonEventData eventData)
+			//{
+			//	WizardAction(button, eventData, () =>
+			//	{
+			//		currentBuilder.ScrollArea();
+			//		currentBuilder.FitContent(SizeFit.Disabled, SizeFit.PreferredSize);
+			//		currentBuilder.VerticalLayout();
+			//	});
+			//}
 
 			void AddHorizontalLayout(IButton button, ButtonEventData eventData)
 			{
 				WizardAction(button, eventData, () => 
 				{
 					HorizontalLayout horizontalLayout = currentBuilder.HorizontalLayout();
-					//lastElement = horizontalLayout;
 					horizontalLayout.OpenInspectorForTarget(openWorkerOnly: true);
 				});
 			}
@@ -511,10 +565,8 @@ namespace UIBuilderWizardMod
 				WizardAction(button, eventData, () =>
 				{
 					ScrollRect scrollRect = currentBuilder.ScrollArea();
-					//lastElement = scrollRect;
 					scrollRect.OpenInspectorForTarget(openWorkerOnly: true);
 					ContentSizeFitter fitter = currentBuilder.FitContent();
-					//lastElement = fitter;
 					fitter.OpenInspectorForTarget(openWorkerOnly: true);
 				});
 			}
@@ -524,7 +576,6 @@ namespace UIBuilderWizardMod
 				WizardAction(button, eventData, () =>
 				{
 					RectTransform rect = currentBuilder.Spacer(24f);
-					//lastElement = rect;
 				});
 			}
 
@@ -534,7 +585,6 @@ namespace UIBuilderWizardMod
 				{
 					Image img = currentBuilder.Image();
 					img.OpenInspectorForTarget(openWorkerOnly: true);
-					//lastElement = img;
 				});
 			}
 
@@ -544,7 +594,6 @@ namespace UIBuilderWizardMod
 				{
 					Text t = currentBuilder.Text("Text");
 					t.OpenInspectorForTarget(openWorkerOnly: true);
-					//lastElement = t;
 				});
 			}
 
@@ -553,7 +602,6 @@ namespace UIBuilderWizardMod
 				WizardAction(button, eventData, () => 
 				{ 
 					Button b = currentBuilder.Button("Button");
-					//lastElement = b;
 				});
 			}
 
@@ -563,7 +611,6 @@ namespace UIBuilderWizardMod
 				{
 					Checkbox checkbox = currentBuilder.Checkbox();
 					checkbox.OpenInspectorForTarget(openWorkerOnly: true);
-					//lastElement = checkbox;
 				});
 			}
 
@@ -574,7 +621,6 @@ namespace UIBuilderWizardMod
 					currentBuilder.Next("RefEditor");
 					RefEditor refEditor = currentBuilder.Current.AttachComponent<RefEditor>();
 					refEditor.Setup(null);
-					//lastElement = refEditor;
 					refEditor.OpenInspectorForTarget(openWorkerOnly: true);
 				});
 			}
@@ -617,6 +663,17 @@ namespace UIBuilderWizardMod
 				});
 			}
 
+			void ForceNext(IButton button, ButtonEventData eventData)
+			{
+				WizardAction(button, eventData, () => 
+				{ 
+					if (forceNextRectTransform.Reference.Target != null)
+					{
+						currentBuilder.ForceNext = forceNextRectTransform.Reference.Target;
+					}
+				});
+			}
+
 			void WizardAction(IButton button, ButtonEventData eventData, Action action)
 			{
 				bool didNestOut = false;
@@ -641,7 +698,7 @@ namespace UIBuilderWizardMod
 				// Run the action
 				action();
 
-                bool flagUndoRoot = false;
+				bool flagUndoRoot = false;
                 bool flagUndoCurrent = false;
 
                 if (!didNestOut && lastRoot != currentBuilder.Root && IsSlotValid(currentBuilder.Root))
@@ -663,7 +720,7 @@ namespace UIBuilderWizardMod
                     });
                 };
 
-                if (IsSlotValid(currentBuilder.Current))
+				if (IsSlotValid(currentBuilder.Current))
                 {
                     currentBuilder.Current.OnPrepareDestroy += (slot) =>
                     {
@@ -675,23 +732,29 @@ namespace UIBuilderWizardMod
                     };
                 }
 
-                if (flagUndoRoot)
+				if (flagUndoRoot)
 				{
-                    currentBuilder.World.BeginUndoBatch(button.LabelText);
-                    var spawnOrDestroy = currentBuilder.Root.CreateSpawnUndoPoint();
-                    currentBuilder.World.EndUndoBatch();
+					currentBuilder.World.BeginUndoBatch(button.LabelText);
+					var spawnOrDestroy = currentBuilder.Root.CreateSpawnUndoPoint();
+					currentBuilder.World.EndUndoBatch();
 					spawnOrDestroy.Target.Changed += (changeable) => 
 					{
 						var syncRef = changeable as ISyncRef;
-                        if (syncRef.Target != null)
+						if (syncRef.Target != null)
 						{
 							currentBuilder.NestInto((Slot)syncRef.Target);
-							UpdateTexts();
-                        }
+							lastRoot = currentBuilder.Root;
+							lastCurrent = currentBuilder.Current;
+							// Run an empty action simply to update the wizard UI
+							WizardSlot.RunSynchronously(() =>
+							{
+								WizardAction(null, new ButtonEventData(), () => { });
+							});
+						}
 					};
                 }
 
-                if (flagUndoCurrent)
+				if (flagUndoCurrent)
                 {
                     currentBuilder.World.BeginUndoBatch(button.LabelText);
                     var spawnOrDestroy = currentBuilder.Current.CreateSpawnUndoPoint();
@@ -699,16 +762,27 @@ namespace UIBuilderWizardMod
                     spawnOrDestroy.Target.Changed += (changeable) =>
                     {
 						var syncRef = changeable as ISyncRef;
-                        if (syncRef.Target != null)
+						if (syncRef.Target != null)
                         {
-							//currentBuilder.ForceNext = ((Slot)syncRef.Target).GetComponent<RectTransform>();
-							currentField.SetValue(currentBuilder, ((Slot)syncRef.Target) ?? ((Component)syncRef.Target).Slot);
-                            UpdateTexts();
-                        }
-                    };
+							if (syncRef.Target is Slot slot)
+							{
+								currentField.SetValue(currentBuilder, slot);
+							}
+							else if (syncRef.Target is Component component)
+							{
+								currentField.SetValue(currentBuilder, component.Slot);
+							}
+							lastCurrent = currentBuilder.Current;
+							// Run an empty action simply to update the wizard UI
+							WizardSlot.RunSynchronously(() =>
+							{
+								WizardAction(null, new ButtonEventData(), () => { });
+							});
+						}
+					};
                 }
 
-                lastRoot = currentBuilder.Root;
+				lastRoot = currentBuilder.Root;
                 lastCurrent = currentBuilder.Current;
 
                 UpdateTexts();
